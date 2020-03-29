@@ -9,10 +9,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class HeartbeatManager {
   /**
@@ -21,15 +20,9 @@ public class HeartbeatManager {
   public static int HEARTBEAT_INTERVAL = 3000;
 
   /**
-   * How long does the heartbeat start after startup.
+   * A timer to manage heartbeat.
    */
-  public static int INIT_DELAY = 0;
-
-  /**
-   * A ThreadPool to manage heartbeat.
-   */
-  private static ScheduledExecutorService scheduledExecutor = Executors
-      .newSingleThreadScheduledExecutor();
+  private static Timer timer = new Timer();
 
   private static DmetaClient dmetaClient;
 
@@ -39,23 +32,29 @@ public class HeartbeatManager {
                           ConcurrentHashMap<String, SlaveClient> clients) {
 
     dmetaClient = new DmetaClient(dmetaServerListStr);
-    scheduledExecutor.scheduleAtFixedRate(() -> {
-      HeartbeatResponse response = dmetaClient.heartbeat(nodeInfo);
-      if (response == null) {
-        return;
-      }
-      HashMap<String, NodeInfo> nodeTable = response.getNodeTable();
-      if (response.getNodeTable().size() > clients.size() + 1) {
-        for (Map.Entry<String, NodeInfo> entry : nodeTable.entrySet()) {
-          if (!clients.containsKey(entry.getKey()) &&
-              !entry.getKey().equals(nodeInfo.getAddress())) {
-            clients.put(entry.getKey(),
-                new SlaveClient(entry.getValue().getAddress()));
+
+    timer.schedule(new TimerTask() {
+      @Override
+      public void run() {
+        HeartbeatResponse response = dmetaClient.heartbeat(nodeInfo);
+        // response == null means something is wrong, for example timeout....
+        if (response == null) {
+          run();
+          return;
+        }
+        HashMap<String, NodeInfo> nodeTable = response.getNodeTable();
+        if (response.getNodeTable().size() > clients.size() + 1) {
+          for (Map.Entry<String, NodeInfo> entry : nodeTable.entrySet()) {
+            if (!clients.containsKey(entry.getKey()) &&
+                !entry.getKey().equals(nodeInfo.getAddress())) {
+              clients.put(entry.getKey(),
+                  new SlaveClient(entry.getValue().getAddress()));
+            }
           }
         }
+        changeNodeInfo(nodeInfo, nodeTable.get(nodeInfo.getAddress()));
       }
-      changeNodeInfo(nodeInfo, nodeTable.get(nodeInfo.getAddress()));
-    }, INIT_DELAY, HEARTBEAT_INTERVAL, TimeUnit.MILLISECONDS);
+    }, 0, HEARTBEAT_INTERVAL);
   }
 
   public void changeNodeInfo(NodeInfo old, NodeInfo young) {
